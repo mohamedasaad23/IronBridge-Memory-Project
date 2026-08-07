@@ -1,0 +1,48 @@
+erDiagram
+    sites ||--o{ equipment : has
+    sites ||--o{ equipment_requests : hosts
+    workers ||--o{ certifications : holds
+    workers ||--o{ equipment_requests : requests
+    equipment ||--o{ equipment_requests : requested
+    equipment_requests ||--o{ audit_log : logged
+
+    sites {
+        int id PK
+        string name
+        int near_power_lines
+    }
+    workers {
+        int id PK
+        string name
+        string role
+    }
+    equipment {
+        int id PK
+        int site_id FK
+        string name
+        string type
+        int high_risk
+        string status
+    }
+    certifications {
+        int id PK
+        int worker_id FK
+        string equipment_type
+        string valid_until
+    }
+    equipment_requests {
+        int id PK
+        int worker_id FK
+        int equipment_id FK
+        int site_id FK
+        string status
+        string risk_summary
+        string created_at
+    }
+    audit_log {
+        int id PK
+        int request_id FK
+        string action
+        string detail
+        string created_at
+    }
