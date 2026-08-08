@@ -114,8 +114,82 @@ def build_certification_transcript(
     }
 
 
-# Fixed suite — 5 variations at different depths, matching the lab's
-# request for "ten variations" scaled down to a repeatable core set.
+def build_equipment_status_transcript(
+    critical_turn: int = 4,
+    total_turns: int = 30,
+    final_question_turn: int | None = None,
+) -> dict[str, Any]:
+    """Second scenario type — deliberately NOT a certification fact, to
+    check strategies generalize rather than being tuned to the one
+    critical_marker string in build_certification_transcript.
+
+    Critical fact: Tower Crane TC-40 at site 2 was pulled OUT_OF_SERVICE
+    for a hydraulic fault, stated once at `critical_turn`. Buried under
+    `total_turns` of unrelated site-chatter noise. The final turn asks
+    the question a correct system must answer using that buried fact.
+    """
+    final_question_turn = final_question_turn or total_turns
+    messages: list[dict[str, str]] = [
+        {
+            "role": "system",
+            "content": "You are the Iron Bridge equipment safety assistant.",
+        }
+    ]
+
+    critical_marker = "EQUIP-TC40-OUT-OF-SERVICE-HYDRAULIC-FAULT"
+
+    for turn in range(1, total_turns + 1):
+        if turn == critical_turn:
+            messages.append(
+                {
+                    "role": "tool",
+                    "content": (
+                        "get_equipment_status(equipment_id=1) -> "
+                        "{'equipment': 'Tower Crane TC-40', 'status': 'OUT_OF_SERVICE', "
+                        "'reason': 'hydraulic fault reported by site 2'} "
+                        f"[[{critical_marker}]]"
+                    ),
+                }
+            )
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": "Noted — Tower Crane TC-40 is out of service for a "
+                    "hydraulic fault, so it can't be assigned to any new request.",
+                }
+            )
+        elif turn == final_question_turn:
+            messages.append(
+                {
+                    "role": "user",
+                    "content": "Is the Tower Crane TC-40 available to assign right now, "
+                    "or is there something blocking it?",
+                }
+            )
+        else:
+            if turn % 5 == 0:
+                messages.append(
+                    {"role": "user", "content": f"Any new requests at site {1 + (turn % 3)}?"}
+                )
+            else:
+                messages.append(
+                    {
+                        "role": "tool",
+                        "content": _fake_compliance_blob(site_id=1 + (turn % 3), turn=turn),
+                    }
+                )
+
+    return {
+        "messages": messages,
+        "critical_marker": critical_marker,
+        "expected_answer_contains": "out of service",
+    }
+
+
+# Fixed suite — 10 variations across 2 scenario types (certification status,
+# equipment status) and a range of depths/positions, so the comparison
+# isn't tuned to one critical-fact string. Per the lab's "keep test suites
+# fixed once you start evaluating" guardrail, this set is now locked.
 def build_test_suite() -> list[dict[str, Any]]:
     return [
         build_certification_transcript(critical_turn=3, total_turns=20),
@@ -123,4 +197,9 @@ def build_test_suite() -> list[dict[str, Any]]:
         build_certification_transcript(critical_turn=5, total_turns=40),
         build_certification_transcript(critical_turn=2, total_turns=60),
         build_certification_transcript(critical_turn=10, total_turns=60),
+        build_certification_transcript(critical_turn=25, total_turns=60),
+        build_equipment_status_transcript(critical_turn=4, total_turns=30),
+        build_equipment_status_transcript(critical_turn=8, total_turns=45),
+        build_equipment_status_transcript(critical_turn=2, total_turns=50),
+        build_equipment_status_transcript(critical_turn=35, total_turns=50),
     ]
