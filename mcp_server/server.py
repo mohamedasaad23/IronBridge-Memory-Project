@@ -30,6 +30,16 @@ from .schemas import (
     GenerateComplianceReportInput,
 )
 
+# Part 3 (RAG) — read-only retrieval over the safety-policy corpus.
+# Uses the *same* db/ironbridge.db as everything else (rag/vector_store.py
+# defaults its DB_PATH there); no parallel database, no new capability
+# gate needed since this tool never writes.
+from rag import ingest as rag_ingest
+from rag.agentic_rag import answer as _agentic_answer
+from rag.hybrid_rag import answer as _hybrid_answer
+from rag.self_rag import check_rag_answer
+from rag.vector_store import VectorStore
+
 EquipmentType = Literal["CRANE", "EXCAVATOR", "SCAFFOLD", "GENERATOR"]
 
 # =====================================================================
@@ -59,6 +69,13 @@ mcp = FastMCP(
 # ---------- Session state (demo-local; production must be per-connection) ----------
 _session_role: str = "worker"          # worker | supervisor
 _supervisor_authenticated: bool = False
+
+# ---------- Part 3 (RAG) — module-level store, idempotent ingest at import ----------
+# rag_ingest.run() chunks the corpus, embeds, and (re)builds the vector index;
+# it's safe to call on every boot (upsert, not append) per the "single
+# enforced owner" rule — only ingest.py writes to rag_chunks.
+rag_ingest.run()
+_rag_store = VectorStore()
 
 
 # =====================================================================
@@ -90,6 +107,22 @@ def electrical_proximity_policy() -> str:
         "as high-risk regardless of equipment type.\n"
         "Minimum clearance: 10 m for cranes, 5 m for excavators.\n"
     )
+
+@mcp.resource("construction://policies/safety-manual-index")
+def safety_manual_index() -> list[dict[str, Any]]:
+    """Part 3 (RAG) — lets a client browse the 5-manual/24-section corpus
+    without issuing a retrieval query."""
+    return [
+        {
+            "chunk_id": c.chunk_id,
+            "doc_id": c.doc_id,
+            "topic": c.topic,
+            "section_id": c.section_id,
+            "heading": c.heading,
+            "last_reviewed": c.last_reviewed,
+        }
+        for c in _rag_store.get_all_chunks()
+    ]
 
 
 # =====================================================================
@@ -153,6 +186,46 @@ def get_equipment_status(
         "site": site,
         "is_high_risk": service.is_high_risk(eq, site or {}),
     }
+
+
+@mcp.tool(
+    name="ask_safety_policy",
+    description=(
+        "Answer a safety-policy question by retrieving grounded context from "
+        "IronBridge's internal manuals (crane, electrical, excavation, fall "
+        "protection, generator/fuel) and generating a cited, verified answer. "
+        "Read-only — never writes to ironbridge.db."
+    ),
+)
+def ask_safety_policy(
+    question: Annotated[str, Field(min_length=1, max_length=500, description="Safety-policy question")],
+    mode: Annotated[Literal["agentic", "hybrid"], Field(description="agentic = multi-hop, best for questions spanning two topics; hybrid = single-hop, lower latency")] = "agentic",
+) -> dict[str, Any]:
+    fn = _agentic_answer if mode == "agentic" else _hybrid_answer
+    result = fn(_rag_store, question)
+    verification = check_rag_answer(_rag_store.conn, question, result.chunks, result.answer)
+
+    response = {
+        "answer": result.answer,
+        "cited_chunks": [c.chunk_id for c in result.chunks],
+        "architecture": result.architecture,
+        "verification": {
+            "relevance_pass": verification.relevance_pass,
+            "support_pass": verification.support_pass,
+            "final_action": verification.final_action,
+        },
+    }
+    # Don't hand a flagged/ungrounded answer to the caller as if it were
+    # authoritative — same "don't trust it silently" principle self_rag.py
+    # documents for the semantic-memory recall path.
+    if verification.final_action != "accepted":
+        response["warning"] = (
+            f"Verification did not pass ({verification.final_action}): "
+            f"{verification.relevance_reason}; {verification.support_reason}. "
+            "Treat this answer as unconfirmed and consult the manual directly."
+        )
+    return response
+
 
 # =====================================================================
 # 2. NOTIFICATIONS + 3. ELICITATION + 6. SAMPLING + 8. DEFENSIVE
@@ -432,6 +505,7 @@ def _harden_schema(tool_name: str) -> None:
 for _name in (
     "check_worker_certification",
     "get_equipment_status",
+    "ask_safety_policy",
     "request_equipment",
     "authenticate_supervisor",
     "generate_site_compliance_report",

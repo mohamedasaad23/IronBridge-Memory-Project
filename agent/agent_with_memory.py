@@ -36,6 +36,12 @@ from agent.client import elicitation_callback, sampling_callback
 from memory import consolidation, router, store
 from memory.stm import ShortTermMemory
 
+# Part 3 (RAG) — Self-RAG-style verification applied to recalled semantic
+# facts too, not just RAG answers (see rag/self_rag.py docstring). Reuses
+# the same ironbridge.db connection rag/vector_store.py already opens.
+from rag.self_rag import check_semantic_recall
+from rag.vector_store import VectorStore
+
 WORKER_ID = 2  # Sara Nabil — has memory-relevant history in seed_data.sql
 
 
@@ -48,6 +54,29 @@ def _record_and_route(stm: ShortTermMemory, role: str, content: str) -> None:
     decision = router.process_overflow(evicted)
     if decision:
         print(f"  [MEMORY] evicted -> {decision.destination}: {decision.reasoning}")
+
+
+def _recall_and_verify_facts(rag_store: VectorStore, query: str, worker_id: int) -> list[dict]:
+    """Part 3 (RAG) integration point: wraps store.get_all_active_facts()
+    with a Self-RAG relevance+support check per fact before it's allowed
+    to inform a live decision (e.g. approving equipment access). A fact
+    that fails verification (e.g. it's about the wrong equipment type
+    relative to the query) is logged and dropped rather than trusted
+    silently — same "don't act on a flagged/ungrounded result" principle
+    as ask_safety_policy in mcp_server/server.py."""
+    facts = store.get_all_active_facts(worker_id)
+    accepted = []
+    for f in facts:
+        fact_text = f"{f['fact_key']} = {f['fact_value']}"
+        result = check_semantic_recall(rag_store.conn, query, fact_text)
+        if result.final_action == "accepted":
+            accepted.append(f)
+        else:
+            print(
+                f"  [SELF-RAG] flagged recalled fact '{fact_text}' "
+                f"({result.final_action}): {result.relevance_reason}; {result.support_reason}"
+            )
+    return accepted
 
 
 async def main() -> None:
@@ -79,17 +108,21 @@ async def main() -> None:
             # ---- Consult semantic memory BEFORE acting ----
             # This is the actual point of long-term memory: the agent
             # checks what it already knows about this worker before
-            # making any live MCP call.
-            active_facts = store.get_all_active_facts(WORKER_ID)
-            print("=== Active semantic facts about worker before acting ===")
+            # making any live MCP call. Part 3: each recalled fact is
+            # Self-RAG-verified against the query it's about to inform —
+            # a fact that fails is dropped, not silently trusted.
+            recall_query = "Can worker 2 use the mobile crane today?"
+            rag_store = VectorStore()
+            active_facts = _recall_and_verify_facts(rag_store, recall_query, WORKER_ID)
+            print("=== Active semantic facts about worker before acting (verified) ===")
             if not active_facts:
-                print("  (none yet — first session for this worker)")
+                print("  (none yet, or none passed verification)")
             for f in active_facts:
                 print(f"  {f['fact_key']} = {f['fact_value']}")
             _record_and_route(
                 stm,
                 "system",
-                f"Recalled {len(active_facts)} active semantic fact(s) for "
+                f"Recalled {len(active_facts)} verified active semantic fact(s) for "
                 f"worker {WORKER_ID} before acting.",
             )
             print()

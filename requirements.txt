@@ -45,3 +45,8 @@ typing_extensions==4.16.0
 urllib3==2.7.0
 uvicorn==0.52.1
 websockets==16.1.1
+
+# --- Added for Part 3: RAG (optional; rag/vector_store.py + rag/bm25_index.py
+# fall back to deterministic pure-Python implementations if absent) ---
+hnswlib>=0.8.0
+rank_bm25>=0.2.2

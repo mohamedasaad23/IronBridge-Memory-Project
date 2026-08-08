@@ -22,8 +22,6 @@ from dotenv import load_dotenv
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 load_dotenv(ROOT / ".env")
-print("DEBUG SUPERVISOR_PIN =", os.environ.get("SUPERVISOR_PIN"))
-print("DEBUG CWD =", ROOT)
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
