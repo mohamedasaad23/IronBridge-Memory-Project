@@ -50,3 +50,8 @@ websockets==16.1.1
 # fall back to deterministic pure-Python implementations if absent) ---
 hnswlib>=0.8.0
 rank_bm25>=0.2.2
+
+# --- Added for Part 4: Decomposition & Planning (planning/) ---
+langchain-core>=0.3.0
+langchain-google-genai>=2.0.0
+networkx>=3.0
