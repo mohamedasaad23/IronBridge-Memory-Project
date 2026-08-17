@@ -160,6 +160,70 @@ likely BM25 sharing common section numbers across manuals on a corpus
 this small, and/or a residual case in the multi-hop topic-detection
 keyword list. Not blocking for this delivery, but worth a follow-up pass.
 
+## Part 4: Decomposition & Planning (Safety Equipment Approval Agent)
+
+**The problem:** the memory/RAG agent above only ever handles one tool call
+or one LLM turn at a time. A real recurring request doesn't fit that shape:
+an engineer requests an excavator to dig a trench that *might* be unstable.
+Approving it safely means checking trench depth, soil stability, whether
+OSHA requires shoring, whether the engineer is certified, whether the
+equipment is actually available, and whether the risk level requires a
+supervisor sign-off — in an order that isn't fixed, on facts that can
+contradict each other mid-decision. A wrong approval (an excavator in an
+unstable trench) or a wrong rejection (a request that would have cleared
+with a different check order) both cost something real. This is a planning
+problem, not a memory problem, so it gets its own agent:
+**`agent/planning_agent.py`** — separate from `agent/agent_with_memory.py`,
+reusing the same `mcp_server/` and `db/`, built on top of a fork of
+[`AmrSheta22/task_decomposition_and_planning`](https://github.com/AmrSheta22/task_decomposition_and_planning)
+inside `planning/`.
+
+Work was split two ways so both people could build against the same real
+request type without colliding on files:
+
+| Concern | Owner | File |
+|---|---|---|
+| Decomposition-first (whole DAG generated up front, executed in topological order) | A | `planning/algorithms/decomposition.py` |
+| Dynamic/interleaved decomposition (next step generated after observing the last result) | B | `planning/algorithms/dynamic_decomposition.py` |
+| Plan-and-Solve (deterministic sub-tasks: certification + equipment availability) | A | `planning/algorithms/plan_and_solve.py` |
+| Tree of Thoughts (ordering the depth/soil/cert/availability checks) | B | `planning/algorithms/tree_of_thoughts.py` |
+| LATS (the final APPROVE / REJECT / ESCALATE decision) | A | `planning/algorithms/lats.py` |
+| Grounded `EnvironmentFeedback` (real DB/OSHA checks, replacing the toolkit's random default) | B | `planning/algorithms/environment.py` |
+| Self-Refine (the message sent back to the engineer) | A | `planning/algorithms/self_refine.py` |
+| Reflexion (the final decision, retried across trials with a carried reflection) | B | `planning/algorithms/reflexion.py` |
+| Routing + orchestration, DAG cycle check, evaluation harness | both | `agent/planning_agent.py`, `planning/models.py`, `planning_eval/` |
+
+**Routing (locatable in `agent/planning_agent.py` as `SUB_TASK_ROUTING`):**
+the two deterministic DB lookups go to Plan-and-Solve, check ordering goes
+to Tree of Thoughts, and the final decision — the single most expensive
+node to get wrong — goes to LATS, scored by the real `GroundedEnvironment`
+instead of the model's own opinion of itself. `planning/models.py`'s `Plan`
+model enforces acyclicity at construction time (`validate_dag`, backed by
+`networkx.is_directed_acyclic_graph`) — a plan that could deadlock is
+rejected before it ever runs, not caught at execution time.
+
+**Grounding:** every deterministic check calls `mcp_server/service.py`
+directly against `db/ironbridge.db` — e.g. `check_certification` correctly
+flags worker 2 (Sara Nabil)'s expired CRANE certification straight from the
+seed data, not from an LLM guess. `GroundedEnvironment.evaluate()` (Owner
+B) replaces the toolkit's randomized `environment.py` default with real
+OSHA/DB checks, and LATS/Reflexion consume that evaluator, not a separate
+self-opinion.
+
+**Comparison table:** `planning_eval/run_eval.py` is the fixed test suite
+and harness (dynamic-favored, lookahead-favored, and simple-deterministic
+cases). Running it end to end for all eight methods (decomposition-first
+vs. dynamic, PS vs. ToT vs. LATS, Self-Refine vs. Reflexion) requires a
+`GOOGLE_API_KEY`/`GEMINI_API_KEY` — the full accuracy/calls/tokens/latency
+table and the per-sub-task justification belong here once that run is
+captured; this repo intentionally does not ship fabricated numbers.
+
+**Demo:** `python -m agent.planning_agent` runs one full request
+(decomposition-first DAG → Plan-and-Solve on the deterministic checks →
+LATS on the final decision, grounded via `GroundedEnvironment` → Self-Refine
+on the engineer-facing message) end to end and prints each stage with its
+routing label. Requires a `GOOGLE_API_KEY` in `.env`.
+
 ## Protocol Concerns Mapping
 
 | # | Concern | How it appears in this system |
@@ -232,6 +296,10 @@ python -m context_eval.run_eval   # reproduces the comparison table above
 python -m rag.ingest              # chunk -> embed -> build vector index
 python -m rag.demo_rag            # standalone demo, mirrors memory/demo_memory.py
 python -m retrieval_eval.run_eval # reproduces the comparison table above
+
+# Part 4 (Decomposition & Planning) — requires GOOGLE_API_KEY (LLM-driven planning/search)
+python -m agent.planning_agent    # one full request: DAG -> Plan-and-Solve -> LATS -> Self-Refine
+python -m planning_eval.run_eval  # fixed test suite, drives the Part 4 comparison table
 
 # All of the above in one pass, one transcript:
 python -m demo_all
