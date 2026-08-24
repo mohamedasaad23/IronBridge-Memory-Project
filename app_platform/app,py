@@ -21,12 +21,15 @@ from flask import Flask, jsonify, request, send_from_directory
 from platform_db.store import init_db
 from platform_db import store
 from multi_agent.router import handle_user_message, resume_graph
+from multi_agent import tool_registry
+from multi_agent.rag_admin import ingest_platform_doc, remove_platform_doc
 from state_graph.engine import apply_hitl_to_state
 from state_graph.graphs import list_graph_names
 
 _STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 app = Flask(__name__, static_folder=_STATIC, static_url_path="")
 init_db()
+tool_registry.ensure_agent_defaults()
 
 
 @app.route("/")
@@ -170,12 +173,15 @@ def api_ticket_resolve(ticket_id: str):
 # ---------- admin: tools & RAG ----------
 @app.post("/api/agents/<agent_id>/tools")
 def api_set_tools(agent_id: str):
+    """Admin tool allow-list. Persists AND gates runtime via tool_registry
+    so the next agent turn can no longer call a disabled tool."""
     body = request.get_json(force=True) or {}
     tools = body.get("tools")
     if not isinstance(tools, list):
         return jsonify({"error": "tools must be a list"}), 400
-    ok = store.set_agent_tools(agent_id, tools)
-    return jsonify({"ok": ok, "tools": tools})
+    ok = tool_registry.set_enabled_tools(agent_id, tools)
+    enabled = tool_registry.get_enabled_tools(agent_id)
+    return jsonify({"ok": ok, "tools": enabled, "catalogue": tool_registry.describe_tools(agent_id)})
 
 
 @app.post("/api/agents/<agent_id>/enabled")
@@ -193,6 +199,8 @@ def api_rag_list():
 
 @app.post("/api/rag")
 def api_rag_add():
+    """Add a document to platform_db AND re-ingest into the real vector store
+    so the Memory/RAG agent retrieves it on the next query."""
     body = request.get_json(force=True) or {}
     title = body.get("title", "").strip()
     content = body.get("content", "").strip()
@@ -200,13 +208,24 @@ def api_rag_add():
     if not title or not content:
         return jsonify({"error": "title and content required"}), 400
     doc_id = store.add_rag_doc(title, topic, content)
-    return jsonify({"ok": True, "doc_id": doc_id})
+    try:
+        n_chunks = ingest_platform_doc(doc_id, title, topic, content)
+    except Exception as e:
+        n_chunks = 0
+        return jsonify({"ok": True, "doc_id": doc_id, "vector_ingest": False, "error": str(e)})
+    return jsonify({"ok": True, "doc_id": doc_id, "vector_ingest": True, "chunks": n_chunks})
 
 
 @app.delete("/api/rag/<doc_id>")
 def api_rag_remove(doc_id: str):
+    """Deactivate in platform_db AND delete chunks from the real vector index."""
     ok = store.remove_rag_doc(doc_id)
-    return jsonify({"ok": ok})
+    deleted = 0
+    try:
+        deleted = remove_platform_doc(doc_id)
+    except Exception as e:
+        return jsonify({"ok": ok, "vector_removed": False, "error": str(e)})
+    return jsonify({"ok": ok, "vector_removed": True, "chunks_deleted": deleted})
 
 
 @app.get("/api/graphs")
