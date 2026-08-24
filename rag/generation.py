@@ -30,7 +30,7 @@ def _gemini_generate(query: str, chunks: List[SearchResult]) -> str:
     api_key = os.environ["GOOGLE_API_KEY"]
     url = (
         "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"gemini-1.5-flash:generateContent?key={api_key}"
+        f"gemini-3.6-flash:generateContent?key={api_key}"
     )
     prompt = (
         "Answer the safety question using ONLY the context below. "

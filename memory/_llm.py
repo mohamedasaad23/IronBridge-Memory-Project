@@ -19,7 +19,7 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 T = TypeVar("T", bound=BaseModel)
 
-MODEL_NAME = "gemini-2.5-flash"
+MODEL_NAME = "gemini-3.6-flash"
 
 
 def call_structured(prompt: str, schema: Type[T], offline_fallback: T) -> T:

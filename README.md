@@ -304,3 +304,58 @@ python -m planning_eval.run_eval  # fixed test suite, drives the Part 4 comparis
 # All of the above in one pass, one transcript:
 python -m demo_all
 ```
+---
+
+## Part 5: Final Project — State Graphs, Platform, Dual-Admin, Multi-Agent
+
+### What was added on top of MCP + Memory/RAG + Planning
+
+| Folder | Role |
+|--------|------|
+| `state_graph/` | 3 cyclic graphs: cert coordination, high-risk dig, incident handoff + checkpoint / HITL / failure tickets |
+| `platform_db/` | Product data: attendance lights, dual-admin requests, notifications, roles (worker/engineer/admin) |
+| `app_platform/` | Flask website — worker / engineer / dual admin UI |
+| `multi_agent/` | Router + Gemini client + **mcp_bridge** (reuses `mcp_server.service` + `rag` when available) |
+| `demo_final.py` | Offline proof of graphs, HITL, tickets, crash-resume |
+
+### Three roles
+
+| Role | Login | Capabilities |
+|------|-------|----------------|
+| Worker | W2 / `1111`, W3 / `2222` | Attendance (red→green after admin), today's tasks via assistant |
+| Engineer | W1 / `1234` | Same + request workers/tools/equipment (**both ADMIN1 and ADMIN2 must approve**) |
+| Admin | ADMIN1 / `9999`, ADMIN2 / `8888` | Attendance approve, dual vote on engineer requests, HITL, tickets |
+
+### Run the product surface
+
+```bash
+pip install -r requirements.txt
+# set GOOGLE_API_KEY and SUPERVISOR_PIN in .env
+python app_platform/app.py
+# → http://127.0.0.1:5050
+```
+
+Offline graph demo (no key required for core paths):
+
+```bash
+python demo_final.py
+```
+
+### Hidden RAG / memory
+
+Chat injects `PERSON_DATA` from `mcp_bridge.try_service_context` (real DB via `mcp_server.service` when `SUPERVISOR_PIN` + DB work) and policy snippets from `rag/` when the vector index exists; otherwise `platform_db` seed. The UI never lists "RAG sources" — the assistant answers in plain language.
+
+### Dual-admin rule
+
+`platform_db.store.vote_request`: status becomes `approved` only if **ADMIN1 and ADMIN2** both approve; **any** reject → `rejected`. Notifications fire on every vote.
+
+### Checkpoint / HITL / tickets
+
+See `state_graph/engine.py`. Admin resolves HITL and failure tickets in the platform; runs resume from the latest checkpoint (not from scratch).
+
+### Wiring into prior labs
+
+- Does **not** replace `agent/agent_with_memory.py` or `agent/planning_agent.py`
+- Graphs are a **new** agent family beside them
+- `multi_agent/mcp_bridge.py` is the deliberate reuse point for `mcp_server/` and `rag/`
+

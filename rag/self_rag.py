@@ -79,7 +79,7 @@ def _gemini_judge(query: str, context_text: str, answer: str) -> Optional[Verifi
     api_key = os.environ["GOOGLE_API_KEY"]
     url = (
         "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"gemini-1.5-flash:generateContent?key={api_key}"
+        f"gemini-3.6-flash:generateContent?key={api_key}"
     )
     prompt = (
         "You are a strict grounding verifier. Respond with ONLY a JSON object: "

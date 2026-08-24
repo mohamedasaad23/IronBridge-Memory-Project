@@ -75,7 +75,7 @@ async def sampling_callback(
             contents=prompt,
         )
         text = resp.text
-        model_name = "gemini-2.5-flash"
+        model_name = "gemini-3.6-flash"
     else:
         text = (
             "[offline demo fallback — set GOOGLE_API_KEY for a real model] "

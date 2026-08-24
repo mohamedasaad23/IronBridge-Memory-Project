@@ -115,7 +115,7 @@ def _build_llm():
     api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
     if not api_key:
         raise ValueError("Set GOOGLE_API_KEY (or GEMINI_API_KEY) in your .env before running this agent.")
-    return ChatGoogleGenerativeAI(model="gemini-2.5-flash", api_key=api_key, temperature=0.1)
+    return ChatGoogleGenerativeAI(model="gemini-3.6-flash", api_key=api_key, temperature=0.1)
 
 
 if __name__ == "__main__":

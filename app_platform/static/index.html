@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Ironbridge</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet"/>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Cairo:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --steel-900:#0E1319; --steel-800:#171F27; --steel-700:#222C37; --steel-600:#374252;
+    --amber:#F2A93B; --amber-dark:#C9861F;
+    --red:#E5484D; --green:#3FB27F;
+    --paper:#EEF1F4; --line:#DDE3EA;
+  }
+  *{box-sizing:border-box}
+  body{font-family:'Cairo',system-ui,sans-serif; background:var(--paper)}
+  .word{font-family:'Oswald',sans-serif; letter-spacing:.04em}
+  .light{width:28px;height:28px;border-radius:50%;display:inline-block;position:relative;border:2px solid rgba(255,255,255,.15)}
+  .light::after{content:'';position:absolute;inset:3px;border-radius:50%;background:radial-gradient(circle at 35% 30%, rgba(255,255,255,.55), transparent 55%)}
+  .light-red{background:radial-gradient(circle at 40% 35%, #ff8a8f, var(--red) 70%);box-shadow:0 0 18px 2px rgba(229,72,77,.65);animation:pulse 1.3s infinite}
+  .light-green{background:radial-gradient(circle at 40% 35%, #7fe0b3, var(--green) 70%);box-shadow:0 0 16px 2px rgba(63,178,127,.55)}
+  .light-off{background:radial-gradient(circle at 40% 35%, #9aa5b3, #6b7684 70%)}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.45}}
+  .badge{font-size:10px;font-weight:700;padding:2px 9px;border-radius:9999px;letter-spacing:.02em}
+  .hazard{height:5px;background-image:repeating-linear-gradient(-45deg,var(--amber) 0 10px,var(--steel-900) 10px 20px)}
+  .panel{background:#fff;border:1px solid var(--line);border-radius:16px;box-shadow:0 1px 2px rgba(16,24,32,.04)}
+  .rivets{position:relative}
+  .rivets::before,.rivets::after{content:'';position:absolute;top:14px;width:7px;height:7px;border-radius:50%;
+    background:radial-gradient(circle at 35% 30%, #cfd8e2, #8a95a3 65%);box-shadow:inset 0 0 0 1px rgba(0,0,0,.15)}
+  .rivets::before{right:14px} .rivets::after{left:14px}
+  .btn{transition:transform .12s ease, background-color .15s ease, box-shadow .15s ease}
+  .btn:active{transform:scale(.96)}
+  .btn:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-visible{
+    outline:2px solid var(--amber); outline-offset:2px}
+  .tab-btn{position:relative;transition:color .15s ease}
+  .tab-btn::after{content:'';position:absolute;left:8px;right:8px;bottom:-9px;height:3px;border-radius:3px;background:var(--amber);
+    transform:scaleX(0);transition:transform .15s ease}
+  .tab-btn.active::after{transform:scaleX(1)}
+  .user-bubble{background:linear-gradient(180deg,var(--amber),var(--amber-dark));color:#1a1305;padding:9px 13px;border-radius:14px 14px 4px 14px;max-width:85%;font-weight:600;font-size:.875rem}
+  .ai-bubble{background:var(--steel-700);color:#EAEFF5;padding:9px 13px;border-radius:14px 14px 14px 4px;max-width:88%;font-size:.875rem;white-space:pre-wrap;line-height:1.6}
+  .avatar{width:26px;height:26px;border-radius:9999px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;flex:none}
+  .typing-dots{display:inline-flex;align-items:center;gap:4px;padding:2px 4px}
+  .typing-dots span{width:6px;height:6px;border-radius:50%;background:#B9C2CE;display:inline-block;animation:bounce 1.3s infinite ease-in-out both}
+  .typing-dots span:nth-child(1){animation-delay:-.28s}
+  .typing-dots span:nth-child(2){animation-delay:-.14s}
+  @keyframes bounce{0%,80%,100%{transform:scale(.55);opacity:.5}40%{transform:scale(1);opacity:1}}
+  @media (prefers-reduced-motion: reduce){
+    .light-red, .typing-dots span{animation:none !important}
+  }
+  ::-webkit-scrollbar{width:8px;height:8px}
+  ::-webkit-scrollbar-thumb{background:#C7CFD8;border-radius:9999px}
+</style>
+</head>
+<body class="min-h-screen text-slate-800">
+<div id="app"></div>
+<script>
+const S = { user:null, chat:[], attAi:null, notifs:[], tasks:[], tab:'home' };
+
+async function api(path, opts={}) {
+  const r = await fetch(path, { headers:{'Content-Type':'application/json',...(opts.headers||{})}, ...opts });
+  return r.json();
+}
+function esc(t){ return String(t??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function initials(name){ return String(name||'?').trim().split(' ').map(w=>w[0]).slice(0,2).join('').toUpperCase(); }
+function render(){ document.getElementById('app').innerHTML = !S.user ? login() : shell(); afterRender(); }
+
+function login(){
+  return `<div class="min-h-screen flex items-center justify-center p-4">
+  <div class="w-full max-w-sm">
+    <div class="hazard rounded-t-2xl"></div>
+    <div class="panel rivets rounded-t-none border-t-0 p-8 pt-7" style="border-radius:0 0 16px 16px">
+      <div class="flex gap-3 items-center mb-6">
+        <div class="p-3 rounded-xl" style="background:linear-gradient(155deg,var(--amber),var(--amber-dark))"><i class="fa-solid fa-hard-hat text-slate-900"></i></div>
+        <div><div class="word font-bold text-xl tracking-wide" style="color:var(--steel-900)">IRONBRIDGE</div>
+        <div class="text-xs text-slate-400">3 أدوار · موظف / مهندس / أدمن</div></div>
+      </div>
+      <label class="text-xs font-bold text-slate-500">الحساب</label>
+      <select id="lid" class="w-full border rounded-lg px-3 py-2.5 text-sm mb-3 mt-1" style="border-color:var(--line)">
+        <option value="W2">Sara — موظف عادي (PIN 1111)</option>
+        <option value="W3">Karim — موظف عادي (PIN 2222)</option>
+        <option value="W1">Mohamed — مهندس موقع (PIN 1234)</option>
+        <option value="ADMIN1">Admin 1 — Ops (PIN 9999)</option>
+        <option value="ADMIN2">Admin 2 — Safety (PIN 8888)</option>
+      </select>
+      <label class="text-xs font-bold text-slate-500">PIN</label>
+      <input id="lpin" type="password" maxlength="4" placeholder="••••" class="w-full border rounded-lg px-3 py-2.5 text-sm mb-1 mt-1 tracking-[.3em]" style="border-color:var(--line)"/>
+      <p id="lerr" class="text-rose-600 text-xs hidden mb-2">PIN غلط</p>
+      <button onclick="doLogin()" class="btn w-full font-bold py-2.5 rounded-lg mt-2" style="background:var(--steel-900);color:var(--amber)">دخول</button>
+    </div>
+  </div></div>`;
+}
+
+async function doLogin(){
+  const d = await api('/api/login',{method:'POST',body:JSON.stringify({worker_id:lid.value,pin:lpin.value})});
+  if(!d.ok){ lerr.classList.remove('hidden'); return; }
+  S.user = d.worker;
+  S.chat = [{from:'ai', text: greet()}];
+  S.tab = S.user.is_admin ? 'requests' : 'home';
+  render();
+}
+function greet(){
+  const r = S.user.role_type;
+  if(r==='worker') return `أهلاً ${S.user.name.split(' ')[0]} 👷 سجّل حضورك واسألني عن مهامك النهاردة.`;
+  if(r==='engineer') return `أهلاً م. ${S.user.name.split(' ')[0]} 🔧 تقدر تطلب عمال/عدد/معدات — محتاج موافقة الأدمنين الاتنين.`;
+  return `أهلاً ${S.user.name} — راجع الطلبات والإشعارات. موافقة مزدوجة مطلوبة.`;
+}
+function logout(){ S.user=null; render(); }
+
+function shell(){
+  const u = S.user;
+  const nUnread = (S.notifs||[]).filter(n=>!n.read).length;
+  const nav = u.is_admin
+    ? [['requests','الطلبات'],['attendance','حضور'],['notifs','إشعارات'+(nUnread?` (${nUnread})`:'')],['hitl','HITL'],['agents','Agents']]
+    : [['home','الرئيسية'],['notifs','إشعارات'+(nUnread?` (${nUnread})`:'')],['chat','المساعد'],
+       ...(u.role_type==='engineer' ? [['request','طلب جديد']] : [])];
+  return `<header class="sticky top-0 z-40" style="background:linear-gradient(180deg,var(--steel-900),var(--steel-800));color:#fff">
+    <div class="max-w-5xl mx-auto px-4 py-3 flex justify-between items-center">
+      <div class="flex items-center gap-2">
+        <div class="p-2 rounded-lg" style="background:linear-gradient(155deg,var(--amber),var(--amber-dark))"><i class="fa-solid fa-hard-hat text-slate-900 text-sm"></i></div>
+        <div><div class="word font-bold tracking-wide">IRONBRIDGE</div>
+        <div class="text-xs text-slate-400">${esc(u.name)} · ${esc(u.role)} · ${esc(u.role_type)}</div></div>
+      </div>
+      <button onclick="logout()" class="btn text-slate-300 text-sm hover:text-amber-400 px-2 py-1"><i class="fa-solid fa-right-from-bracket"></i></button>
+    </div>
+    <div class="max-w-5xl mx-auto px-4 pb-0 flex gap-5 flex-wrap">
+      ${nav.map(([id,lab])=>`<button onclick="S.tab='${id}';render()" class="tab-btn ${S.tab===id?'active':''} pb-3 text-sm font-semibold ${S.tab===id?'text-amber-400':'text-slate-400 hover:text-slate-200'}">${lab}</button>`).join('')}
+    </div>
+    <div class="hazard"></div>
+    </header>
+    <main class="max-w-5xl mx-auto px-4 py-5">${page()}</main>`;
+}
+
+function page(){
+  if(S.tab==='home') return pageHome();
+  if(S.tab==='chat') return pageChat();
+  if(S.tab==='request') return pageNewRequest();
+  if(S.tab==='notifs') return pageNotifs();
+  if(S.tab==='requests') return pageAdminRequests();
+  if(S.tab==='attendance') return pageAdminAtt();
+  if(S.tab==='hitl') return pageHitl();
+  if(S.tab==='agents') return pageAgents();
+  return '';
+}
+
+function lightClass(l){ return l==='red'?'light light-red':l==='green'?'light light-green':'light light-off'; }
+
+function pageHome(){
+  const c = S.attAi||{};
+  const tasks = S.tasks||[];
+  return `<div class="space-y-4">
+    <section class="rivets rounded-2xl p-5" style="background:linear-gradient(150deg,var(--steel-800),var(--steel-900));color:#fff;border:1px solid var(--steel-600)">
+      <div class="flex flex-wrap items-center justify-between gap-4">
+        <div class="flex items-center gap-4">
+          <span class="${lightClass(c.light||'off')}"></span>
+          <div>
+            <div class="font-bold">الحضور</div>
+            <div class="text-xs text-slate-400 mt-0.5">${esc(c.ai_message||'سجّل حضورك')}</div>
+          </div>
+        </div>
+        <div class="flex gap-2">
+          <button onclick="clockIn()" class="btn text-white px-3 py-2 rounded-lg text-sm font-bold" style="background:var(--green)">تسجيل حضور</button>
+          <button onclick="clockOut()" class="btn text-white px-3 py-2 rounded-lg text-sm font-bold" style="background:var(--red)">انصراف</button>
+        </div>
+      </div>
+      <p class="text-[11px] text-slate-400 mt-3">🔴 بانتظار موافقة أدمن · 🟢 موافق عليه</p>
+    </section>
+    <section class="panel p-5">
+      <div class="flex justify-between items-center mb-3">
+        <h3 class="font-bold">مهام النهاردة</h3>
+        <button onclick="askTasks()" class="text-xs font-bold" style="color:var(--amber-dark)">اسأل المساعد</button>
+      </div>
+      ${tasks.length? tasks.map(t=>`<div class="border rounded-lg p-3 mb-2 flex justify-between" style="border-color:var(--line)">
+        <div><div class="font-semibold text-sm">${esc(t.title)}</div>
+        <div class="text-xs text-slate-400">${esc(t.priority)} · ${esc(t.status)}</div></div>
+      </div>`).join('') : `<p class="text-sm text-slate-400">مفيش مهام ظاهرة — اسأل المساعد.</p>`}
+    </section>
+    ${S.user.role_type==='engineer'?`<section class="rounded-xl p-4 text-sm" style="background:#FEF6E7;border:1px solid #F3DBA0">
+      كمهندس: من تاب <b>طلب جديد</b> تقدر تطلب عمال أو عدد أو معدات. لازم <b>Admin1 و Admin2</b> يوافقوا الاتنين.
+    </section>`:''}
+  </div>`;
+}
+
+function chatBubble(b){
+  if(b.typing){
+    return `<div class="flex justify-end gap-2 items-end">
+      <div class="ai-bubble typing-bubble"><span class="typing-dots"><span></span><span></span><span></span></span></div>
+      <div class="avatar" style="background:var(--steel-700);color:var(--amber)">IB</div>
+    </div>`;
+  }
+  if(b.from==='user'){
+    return `<div class="flex justify-start gap-2 items-end">
+      <div class="avatar" style="background:var(--amber);color:#1a1305">${esc(initials(S.user?.name))}</div>
+      <div class="user-bubble">${esc(b.text)}</div>
+    </div>`;
+  }
+  return `<div class="flex justify-end gap-2 items-end">
+    <div class="ai-bubble">${esc(b.text)}</div>
+    <div class="avatar" style="background:var(--steel-700);color:var(--amber)">IB</div>
+  </div>`;
+}
+
+function pageChat(){
+  return `<div class="panel p-4 flex flex-col h-[65vh]">
+    <div class="text-xs text-slate-400 mb-2 pb-2 border-b" style="border-color:var(--line)">المساعد بيستخدم بياناتك من النظام في الخفاء (مهام · حضور · شهادات · سياسة)</div>
+    <div id="chat" class="flex-1 overflow-y-auto space-y-3 rounded-lg p-3 text-sm" style="background:var(--paper)">
+      ${S.chat.map(chatBubble).join('')}
+    </div>
+    <form onsubmit="sendChat(event)" class="mt-3 flex gap-2">
+      <input id="msg" class="flex-1 border rounded-lg px-3 py-2 text-sm" style="border-color:var(--line)" placeholder="إيه مهامي النهاردة؟" autocomplete="off"/>
+      <button class="btn px-4 rounded-lg font-bold" style="background:var(--steel-900);color:var(--amber)"><i class="fa-solid fa-paper-plane"></i></button>
+    </form>
+  </div>`;
+}
+
+function pageNewRequest(){
+  return `<div class="panel p-5 space-y-3 max-w-lg">
+    <h3 class="font-bold">طلب جديد (موافقة مزدوجة من الأدمنين)</h3>
+    <label class="text-xs font-semibold text-slate-500">النوع</label>
+    <select id="rtype" class="w-full border rounded-lg px-3 py-2 text-sm" style="border-color:var(--line)">
+      <option value="workers">طلب موظفين / عمال</option>
+      <option value="tools">طلب عدد / أدوات</option>
+      <option value="equipment">طلب معدات ثقيلة</option>
+    </select>
+    <label class="text-xs font-semibold text-slate-500">العنوان</label>
+    <input id="rtitle" class="w-full border rounded-lg px-3 py-2 text-sm" style="border-color:var(--line)" placeholder="مثال: 3 عمال لقطاع B"/>
+    <label class="text-xs font-semibold text-slate-500">تفاصيل</label>
+    <textarea id="rdetails" class="w-full border rounded-lg px-3 py-2 text-sm" style="border-color:var(--line)" rows="3" placeholder="الكمية / الموقع / السبب"></textarea>
+    <button onclick="submitReq()" class="btn font-bold px-4 py-2 rounded-lg" style="background:var(--steel-900);color:var(--amber)">إرسال للأدمنين</button>
+    <p class="text-xs text-slate-400">لو أدمن واحد رفض → الطلب كله مرفوض. لازم الاتنين يوافقوا.</p>
+  </div>`;
+}
+
+function pageNotifs(){
+  const items = S.notifs||[];
+  return `<div class="panel p-4">
+    <h3 class="font-bold mb-3">الإشعارات</h3>
+    ${items.length? items.map(n=>`<div class="border rounded-lg p-3 mb-2 ${n.read?'opacity-60':''}" style="border-color:var(--line)">
+      <div class="flex justify-between"><span class="font-semibold text-sm">${esc(n.title)}</span>
+      <span class="badge ${n.kind==='danger'?'bg-rose-100 text-rose-800':n.kind==='success'?'bg-emerald-100 text-emerald-800':'bg-amber-100 text-amber-800'}">${esc(n.kind)}</span></div>
+      <p class="text-xs text-slate-600 mt-1">${esc(n.body)}</p>
+      ${!n.read?`<button onclick="readNtf('${n.id}')" class="text-xs mt-1 font-bold" style="color:var(--amber-dark)">تعليمها كمقروء</button>`:''}
+    </div>`).join('') : `<p class="text-slate-400 text-sm">مفيش إشعارات</p>`}
+  </div>`;
+}
+
+function pageAdminRequests(){
+  return `<div id="admin-req" class="panel p-4"><p class="text-slate-400 text-sm">تحميل...</p></div>`;
+}
+function pageAdminAtt(){
+  return `<div id="admin-att" class="panel p-4"><p class="text-slate-400 text-sm">تحميل...</p></div>`;
+}
+function pageHitl(){
+  return `<div id="admin-hitl" class="panel p-4">...</div>`;
+}
+function pageAgents(){
+  return `<div id="admin-agents" class="panel p-4">...</div>`;
+}
+
+async function afterRender(){
+  if(!S.user) return;
+  S.notifs = await api('/api/notifications?user_id='+S.user.id);
+  if(!S.user.is_admin){
+    const att = await api('/api/attendance/me?worker_id='+S.user.id);
+    S.attAi = att.ai_check;
+    S.tasks = await api('/api/tasks?worker_id='+S.user.id);
+  }
+  if(S.tab==='requests') loadAdminReq();
+  if(S.tab==='attendance') loadAdminAtt();
+  if(S.tab==='hitl') loadHitl();
+  if(S.tab==='agents') loadAgents();
+  const chatEl = document.getElementById('chat');
+  if(chatEl) chatEl.scrollTop = chatEl.scrollHeight;
+}
+
+async function clockIn(){
+  const d = await api('/api/attendance/clock-in',{method:'POST',body:JSON.stringify({worker_id:S.user.id})});
+  S.attAi = d.ai_check;
+  S.chat.push({from:'ai', text: d.ai_check?.ai_message || 'طلب حضور اتبعت — نور أحمر'});
+  S.tab='home'; render();
+}
+async function clockOut(){
+  const d = await api('/api/attendance/clock-out',{method:'POST',body:JSON.stringify({worker_id:S.user.id})});
+  S.attAi = d.ai_check; S.tab='home'; render();
+}
+function chatHistoryForApi(){
+  // last few real turns (skip the typing placeholder), so the backend can
+  // actually follow up on what was just said instead of starting fresh.
+  return S.chat.filter(b=>!b.typing).slice(-8).map(b=>({role: b.from==='user'?'user':'assistant', text: b.text}));
+}
+async function askTasks(){
+  S.tab='chat';
+  const history = chatHistoryForApi();
+  S.chat.push({from:'user', text:'إيه مهامي النهاردة؟'});
+  S.chat.push({from:'ai', typing:true});
+  render();
+  const res = await api('/api/chat',{method:'POST',body:JSON.stringify({message:'إيه مهامي النهاردة؟', worker_id:S.user.id, agent:'memory_rag', history})});
+  S.chat.pop();
+  S.chat.push({from:'ai', text: res.reply||JSON.stringify(res)});
+  render();
+}
+async function sendChat(e){
+  e.preventDefault();
+  const msgInput = document.getElementById('msg');
+  const text = msgInput.value.trim();
+  if(!text) return;
+  const history = chatHistoryForApi();
+  S.chat.push({from:'user', text});
+  msgInput.value='';
+  S.chat.push({from:'ai', typing:true});
+  render();
+  const res = await api('/api/chat',{method:'POST',body:JSON.stringify({message:text, worker_id:S.user.id, agent:'memory_rag', history})});
+  S.chat.pop();
+  S.chat.push({from:'ai', text: res.reply || JSON.stringify(res)});
+  render();
+  document.getElementById('msg')?.focus();
+}
+async function submitReq(){
+  const row = await api('/api/requests',{method:'POST',body:JSON.stringify({
+    requester_id: S.user.id,
+    req_type: rtype.value,
+    title: rtitle.value,
+    details: { note: rdetails.value }
+  })});
+  if(row.error){ alert(row.error); return; }
+  alert('اتبعت للأدمنين. هيجيلك إشعار لما يتقرر.');
+  S.tab='notifs'; render();
+}
+async function readNtf(id){
+  await api('/api/notifications/'+id+'/read',{method:'POST',body:'{}'});
+  render();
+}
+
+async function loadAdminReq(){
+  const el = document.getElementById('admin-req'); if(!el) return;
+  const items = await api('/api/requests');
+  el.innerHTML = `<h3 class="font-bold mb-3">طلبات المهندسين (موافقة مزدوجة)</h3>` +
+    (items.length? items.map(r=>{
+      const a = r.approvals||{};
+      return `<div class="border rounded-lg p-3 mb-2" style="border-color:var(--line)">
+        <div class="font-semibold">${esc(r.title)}</div>
+        <div class="text-xs text-slate-500">${esc(r.req_type)} · من ${esc(r.requester_id)} · ${esc(r.status)}</div>
+        <div class="text-xs mt-1">ADMIN1: ${esc(a.ADMIN1||'—')} · ADMIN2: ${esc(a.ADMIN2||'—')}</div>
+        ${r.status==='pending'?`<div class="flex gap-2 mt-2">
+          <button onclick="vote('${r.id}','approved')" class="btn px-3 py-1 text-white text-xs rounded font-bold" style="background:var(--green)">موافقة</button>
+          <button onclick="vote('${r.id}','rejected')" class="btn px-3 py-1 text-white text-xs rounded font-bold" style="background:var(--red)">رفض</button>
+        </div>`:''}
+      </div>`;
+    }).join('') : '<p class="text-slate-400 text-sm">فاضي</p>');
+}
+async function vote(rid, decision){
+  await api('/api/requests/'+rid+'/vote',{method:'POST',body:JSON.stringify({admin_id:S.user.id, decision})});
+  loadAdminReq();
+  S.notifs = await api('/api/notifications?user_id='+S.user.id);
+}
+async function loadAdminAtt(){
+  const el = document.getElementById('admin-att'); if(!el) return;
+  const pending = await api('/api/attendance/pending');
+  el.innerHTML = `<h3 class="font-bold mb-3">حضور بانتظار الموافقة</h3>` +
+    (pending.length? pending.map(r=>`<div class="border rounded-lg p-3 mb-2 flex justify-between items-center" style="border-color:var(--line)">
+      <div class="flex gap-2 items-center"><span class="light light-red"></span>
+      <span class="text-sm">${esc(r.worker_id)} · ${esc(r.day)} · ${esc(r.check_in)}</span></div>
+      <div class="flex gap-2">
+        <button onclick="apAtt('${r.worker_id}','${r.day}')" class="btn px-2 py-1 text-white text-xs rounded font-bold" style="background:var(--green)">موافقة</button>
+        <button onclick="rjAtt('${r.worker_id}','${r.day}')" class="btn px-2 py-1 text-white text-xs rounded font-bold" style="background:var(--red)">رفض</button>
+      </div></div>`).join('') : '<p class="text-slate-400 text-sm">فاضي</p>');
+}
+async function apAtt(w,d){ await api('/api/attendance/approve',{method:'POST',body:JSON.stringify({worker_id:w,day:d})}); loadAdminAtt(); }
+async function rjAtt(w,d){ await api('/api/attendance/reject',{method:'POST',body:JSON.stringify({worker_id:w,day:d})}); loadAdminAtt(); }
+async function loadHitl(){
+  const el = document.getElementById('admin-hitl'); if(!el) return;
+  const items = await api('/api/hitl?status=open');
+  el.innerHTML = items.length? items.map(t=>`<div class="border p-3 mb-2 rounded-lg" style="border-color:var(--line)"><div class="font-semibold text-sm">${esc(t.title)}</div>
+    <button onclick="(async()=>{await api('/api/hitl/${t.task_id}/resolve',{method:'POST',body:JSON.stringify({decision:'approved'})});loadHitl()})()" class="btn mt-1 text-xs text-white px-2 py-1 rounded" style="background:var(--green)">Approve</button>
+  </div>`).join('') : '<p class="text-slate-400 text-sm">فاضي</p>';
+}
+async function loadAgents(){
+  const el = document.getElementById('admin-agents'); if(!el) return;
+  const agents = await api('/api/agents');
+  el.innerHTML = agents.map(a=>`<div class="border p-2 mb-1 rounded text-sm flex justify-between items-center" style="border-color:var(--line)">
+    <span>${esc(a.name)}</span><span class="badge ${a.enabled?'bg-emerald-100 text-emerald-800':'bg-slate-200 text-slate-600'}">${a.enabled?'ON':'OFF'}</span>
+  </div>`).join('');
+}
+
+render();
+</script>
+</body>
+</html>

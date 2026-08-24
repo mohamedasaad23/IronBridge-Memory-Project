@@ -1,0 +1,380 @@
+"""
+Ironbridge Final Project Platform
+  - User: switch agents, chat
+  - Admin: tools per agent, RAG docs, HITL queue, failure tickets, resume runs
+
+Run:  cd ironbridge_final && python app_platform/app.py
+Then open http://127.0.0.1:5050
+"""
+from __future__ import annotations
+
+import os
+import sys
+
+# package root
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+
+from flask import Flask, jsonify, request, send_from_directory
+
+from platform_db.store import init_db
+from platform_db import store
+from multi_agent.router import handle_user_message, resume_graph
+from state_graph.engine import apply_hitl_to_state
+from state_graph.graphs import list_graph_names
+
+_STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+app = Flask(__name__, static_folder=_STATIC, static_url_path="")
+init_db()
+
+
+@app.route("/")
+def index():
+    return send_from_directory(app.static_folder, "index.html")
+
+
+# ---------- auth (demo PINs) ----------
+@app.post("/api/login")
+def login():
+    body = request.get_json(force=True) or {}
+    wid = body.get("worker_id")
+    pin = body.get("pin")
+    w = store.get_worker(wid)
+    if not w or w.get("pin") != pin:
+        return jsonify({"ok": False, "error": "Invalid PIN"}), 401
+    return jsonify(
+        {
+            "ok": True,
+            "worker": {
+                "id": w["id"],
+                "name": w["name"],
+                "role": w["role"],
+                "role_type": w.get("role_type") or ("admin" if w.get("is_admin") else "worker"),
+                "is_admin": bool(w["is_admin"]),
+            },
+        }
+    )
+
+
+# ---------- user chat / multi-agent ----------
+@app.get("/api/agents")
+def api_agents():
+    return jsonify(store.list_agents())
+
+
+@app.post("/api/chat")
+def api_chat():
+    body = request.get_json(force=True) or {}
+    msg = body.get("message", "").strip()
+    worker_id = body.get("worker_id")
+    force = body.get("agent")  # optional agent switcher
+    # Recent turns from the client, so follow-up questions ("no, I meant me")
+    # can actually be understood instead of every call starting from zero.
+    history = body.get("history") or []
+    if not msg:
+        return jsonify({"error": "empty"}), 400
+    result = handle_user_message(msg, worker_id=worker_id, force_agent=force, history=history)
+    return jsonify(result)
+
+
+@app.post("/api/runs/<run_id>/resume")
+def api_resume(run_id: str):
+    body = request.get_json(force=True) or {}
+    graph_name = body.get("graph_name")
+    run = store.get_run(run_id)
+    if not run:
+        return jsonify({"error": "run not found"}), 404
+    graph_name = graph_name or run["graph_name"]
+    try:
+        result = resume_graph(graph_name, run_id)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.get("/api/runs")
+def api_runs():
+    return jsonify(store.list_runs())
+
+
+@app.get("/api/runs/<run_id>")
+def api_run(run_id: str):
+    run = store.get_run(run_id)
+    if not run:
+        return jsonify({"error": "not found"}), 404
+    cp = store.latest_checkpoint(run_id)
+    return jsonify({"run": run, "checkpoint": cp})
+
+
+# ---------- admin: HITL ----------
+@app.get("/api/hitl")
+def api_hitl_list():
+    status = request.args.get("status", "open")
+    if status == "all":
+        status = None
+    return jsonify(store.list_hitl(status))
+
+
+@app.post("/api/hitl/<task_id>/resolve")
+def api_hitl_resolve(task_id: str):
+    body = request.get_json(force=True) or {}
+    decision = body.get("decision")  # approved | rejected
+    note = body.get("note", "")
+    if decision not in ("approved", "rejected"):
+        return jsonify({"error": "decision must be approved|rejected"}), 400
+    task = store.resolve_hitl(task_id, decision, note)
+    if not task:
+        return jsonify({"error": "task not found or already resolved"}), 404
+    # inject decision into graph state
+    apply_hitl_to_state(task["run_id"], decision, note)
+    # auto-resume
+    run = store.get_run(task["run_id"])
+    result = None
+    if run:
+        try:
+            result = resume_graph(run["graph_name"], task["run_id"])
+        except Exception as e:
+            result = {"error": str(e)}
+    return jsonify({"task": task, "resume": result})
+
+
+# ---------- admin: tickets ----------
+@app.get("/api/tickets")
+def api_tickets():
+    status = request.args.get("status", "open")
+    if status == "all":
+        status = None
+    return jsonify(store.list_tickets(status))
+
+
+@app.post("/api/tickets/<ticket_id>/resolve")
+def api_ticket_resolve(ticket_id: str):
+    body = request.get_json(force=True) or {}
+    note = body.get("note", "resolved")
+    row = store.resolve_ticket(ticket_id, note)
+    if not row:
+        return jsonify({"error": "not found"}), 404
+    run_id = row["run_id"]
+    run = store.get_run(run_id)
+    resume_result = None
+    if run:
+        store.update_run_status(run_id, "running")
+        try:
+            resume_result = resume_graph(run["graph_name"], run_id)
+        except Exception as e:
+            resume_result = {"error": str(e)}
+    return jsonify({"ticket": row, "resume": resume_result})
+
+
+# ---------- admin: tools & RAG ----------
+@app.post("/api/agents/<agent_id>/tools")
+def api_set_tools(agent_id: str):
+    body = request.get_json(force=True) or {}
+    tools = body.get("tools")
+    if not isinstance(tools, list):
+        return jsonify({"error": "tools must be a list"}), 400
+    ok = store.set_agent_tools(agent_id, tools)
+    return jsonify({"ok": ok, "tools": tools})
+
+
+@app.post("/api/agents/<agent_id>/enabled")
+def api_set_enabled(agent_id: str):
+    body = request.get_json(force=True) or {}
+    enabled = bool(body.get("enabled", True))
+    ok = store.set_agent_enabled(agent_id, enabled)
+    return jsonify({"ok": ok, "enabled": enabled})
+
+
+@app.get("/api/rag")
+def api_rag_list():
+    return jsonify(store.list_rag_docs(active_only=False))
+
+
+@app.post("/api/rag")
+def api_rag_add():
+    body = request.get_json(force=True) or {}
+    title = body.get("title", "").strip()
+    content = body.get("content", "").strip()
+    topic = body.get("topic", "general")
+    if not title or not content:
+        return jsonify({"error": "title and content required"}), 400
+    doc_id = store.add_rag_doc(title, topic, content)
+    return jsonify({"ok": True, "doc_id": doc_id})
+
+
+@app.delete("/api/rag/<doc_id>")
+def api_rag_remove(doc_id: str):
+    ok = store.remove_rag_doc(doc_id)
+    return jsonify({"ok": ok})
+
+
+@app.get("/api/graphs")
+def api_graphs():
+    return jsonify(list_graph_names())
+
+
+
+
+@app.get("/api/tasks")
+def api_tasks():
+    wid = request.args.get("worker_id")
+    if not wid:
+        return jsonify({"error": "worker_id"}), 400
+    return jsonify(store.list_tasks_for(wid))
+
+
+@app.get("/api/notifications")
+def api_notifications():
+    uid = request.args.get("user_id")
+    if not uid:
+        return jsonify({"error": "user_id"}), 400
+    return jsonify(store.list_notifications(uid))
+
+
+@app.post("/api/notifications/<nid>/read")
+def api_notif_read(nid: str):
+    return jsonify({"ok": store.mark_notification_read(nid)})
+
+
+@app.get("/api/requests")
+def api_requests():
+    status = request.args.get("status")
+    return jsonify(store.list_requests(status))
+
+
+@app.post("/api/requests")
+def api_create_request():
+    body = request.get_json(force=True) or {}
+    rid = body.get("requester_id")
+    req_type = body.get("req_type", "tools")
+    title = body.get("title", "").strip()
+    details = body.get("details") or {}
+    if not rid or not title:
+        return jsonify({"error": "requester_id and title required"}), 400
+    w = store.get_worker(rid)
+    if not w or w.get("role_type") not in ("engineer", "admin"):
+        return jsonify({"error": "only engineer can create requests"}), 403
+    row = store.create_request(rid, req_type, title, details)
+    return jsonify(row)
+
+
+@app.post("/api/requests/<rid>/vote")
+def api_vote_request(rid: str):
+    body = request.get_json(force=True) or {}
+    admin_id = body.get("admin_id")
+    decision = body.get("decision")
+    note = body.get("note", "")
+    row = store.vote_request(rid, admin_id, decision, note)
+    if not row:
+        return jsonify({"error": "vote failed"}), 400
+    return jsonify(row)
+
+
+@app.get("/api/inventory")
+def api_inventory():
+    return jsonify({"tools": store.list_tools(), "equipment": store.list_equipment_all()})
+
+
+# ---------- attendance ----------
+@app.get("/api/attendance/me")
+def api_att_me():
+    worker_id = request.args.get("worker_id")
+    if not worker_id:
+        return jsonify({"error": "worker_id required"}), 400
+    row = store.get_attendance(worker_id)
+    check = store.attendance_ai_check(worker_id)
+    return jsonify({"record": row, "ai_check": check})
+
+
+@app.post("/api/attendance/clock-in")
+def api_clock_in():
+    body = request.get_json(force=True) or {}
+    worker_id = body.get("worker_id")
+    if not worker_id:
+        return jsonify({"error": "worker_id required"}), 400
+    row = store.clock_in(worker_id)
+    check = store.attendance_ai_check(worker_id)
+    return jsonify({"record": row, "ai_check": check})
+
+
+@app.post("/api/attendance/clock-out")
+def api_clock_out():
+    body = request.get_json(force=True) or {}
+    worker_id = body.get("worker_id")
+    if not worker_id:
+        return jsonify({"error": "worker_id required"}), 400
+    row = store.clock_out(worker_id)
+    check = store.attendance_ai_check(worker_id)
+    return jsonify({"record": row, "ai_check": check})
+
+
+@app.post("/api/attendance/ai-check")
+def api_att_ai():
+    """AI reviews attendance — Gemini if key set, else rules."""
+    body = request.get_json(force=True) or {}
+    worker_id = body.get("worker_id")
+    if not worker_id:
+        return jsonify({"error": "worker_id required"}), 400
+    check = store.attendance_ai_check(worker_id)
+    # enrich with Gemini narrative
+    try:
+        from multi_agent import llm
+        ctx = str(check)
+        msg = (
+            "Review this worker attendance record. Say clearly if they are on time, late, "
+            "missing check-in, or forgot to clock out. One short paragraph, same language as needed."
+        )
+        narrative = llm.chat(msg, context=ctx, system=(
+            "You are Ironbridge site attendance checker. Be firm but fair. "
+            "Under 60 words. Arabic if the context suggests Arabic names."
+        ))
+        check["ai_narrative"] = narrative
+        check["llm"] = "gemini" if llm.available() else "rules"
+    except Exception as e:
+        check["ai_narrative"] = "; ".join(check.get("issues") or [])
+        check["llm"] = f"rules ({e})"
+    return jsonify(check)
+
+
+
+@app.get("/api/attendance/pending")
+def api_att_pending():
+    return jsonify(store.list_pending_attendance())
+
+
+@app.post("/api/attendance/approve")
+def api_att_approve():
+    body = request.get_json(force=True) or {}
+    worker_id = body.get("worker_id")
+    day = body.get("day")
+    if not worker_id:
+        return jsonify({"error": "worker_id required"}), 400
+    row = store.approve_attendance(worker_id, day, body.get("note", ""))
+    if not row:
+        return jsonify({"error": "no attendance record"}), 404
+    return jsonify({"record": row, "ai_check": store.attendance_ai_check(worker_id)})
+
+
+@app.post("/api/attendance/reject")
+def api_att_reject():
+    body = request.get_json(force=True) or {}
+    worker_id = body.get("worker_id")
+    day = body.get("day")
+    if not worker_id:
+        return jsonify({"error": "worker_id required"}), 400
+    row = store.reject_attendance(worker_id, day, body.get("note", ""))
+    if not row:
+        return jsonify({"error": "no attendance record"}), 404
+    return jsonify({"record": row, "ai_check": store.attendance_ai_check(worker_id)})
+
+
+@app.get("/api/attendance")
+def api_att_list():
+    return jsonify(store.list_attendance())
+
+
+if __name__ == "__main__":
+    print("Ironbridge platform → http://127.0.0.1:5050")
+    print("Demo login: W1 / 1234  |  ADMIN / 9999")
+    app.run(host="0.0.0.0", port=5050, debug=True)
